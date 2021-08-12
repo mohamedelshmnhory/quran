@@ -16,13 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'constants.dart';
 import 'loading_screen.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitUp,
-  ]);
+Future<Directory> checkUpdate() async {
   SharedPreferences pref = await SharedPreferences.getInstance();
   final bool update = pref.getBool("update1") ?? true;
   Directory appDocDirectory;
@@ -39,6 +33,17 @@ void main() async {
     pref.setBool("update1", false);
     dir.create(recursive: true);
   }
+  return appDocDirectory;
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitUp,
+  ]);
+  Directory appDocDirectory = await checkUpdate();
   runApp(MyApp(appDocDirectory));
 }
 
@@ -53,28 +58,28 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.brown,
         fontFamily: 'Tajawal',
       ),
-      home: MusicApp(dir),
+      home: App(dir),
     );
   }
 }
 
-class MusicApp extends StatefulWidget {
+class App extends StatefulWidget {
   final Directory dir;
-  MusicApp(this.dir);
+  App(this.dir);
   @override
-  _MusicAppState createState() => _MusicAppState();
+  _AppState createState() => _AppState();
 }
 
-class _MusicAppState extends State<MusicApp> {
+class _AppState extends State<App> {
   final storage = FirebaseStorage.instance;
+  final _player = AssetsAudioPlayer();
   bool playing = false;
   IconData playBtn = Icons.play_arrow;
   IconData modeBtn = Icons.sync_alt;
   String playingTitle = '';
   int playingNum = 1;
-  final _player = AssetsAudioPlayer();
   Duration position = Duration();
-  Duration musicLength = Duration();
+  Duration soundLength = Duration();
   ScrollController _scrollController = ScrollController();
   bool isInit = true;
   bool downloading = false;
@@ -90,96 +95,14 @@ class _MusicAppState extends State<MusicApp> {
       seek: seek ?? seek,
     )
         .then((value) {
-      Future.delayed(Duration.zero, () {
-        _scrollController.animateTo(
-            (_scrollController.position.maxScrollExtent / 115) *
-                (playingNum.toDouble() - 1),
-            duration: Duration(milliseconds: 100),
-            curve: Curves.linear);
-      });
-      setState(() {
-        playBtn = Icons.pause;
-        playing = true;
-        playingTitle = title[soundNumber - 1];
-        playingNum = soundNumber;
-      });
-      _player.updateCurrentAudioNotification(
-        metas: Metas(
-          artist: 'الشيخ أحمد جمال',
-          title: playingTitle,
-        ),
-      );
-      soundInf.setString('playingTitle', playingTitle);
-      soundInf.setInt('playingNum', playingNum);
+      changeScroll();
+      updateDetails(soundNumber, soundInf);
     }).catchError((e) {
       if (e.toString().contains('PlatformException(OPEN, null, null, null)')) {
         showAlert();
       }
     });
-    _player.current.listen((playingAudio) {
-      if (_player.current != null)
-        try {
-          setState(() {
-            musicLength = playingAudio.audio.duration;
-          });
-          soundInf.setInt('musicLength', musicLength.inSeconds);
-        } catch (e) {
-          // TODO
-        }
-    });
-    _player.currentPosition.listen((p) {
-      setState(() {
-        position = p;
-      });
-      soundInf.setInt('position', position.inSeconds);
-    });
-  }
-
-  Future<void> downloadList() async {
-    File file;
-    final listRef = storage.ref().child("new");
-    try {
-      final result = await InternetAddress.lookup('google.com');
-      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-        listRef
-            .listAll()
-            .then((list) async {
-              for (var element in list.items) {
-                String filePath = '${widget.dir.path}/${element.name}';
-                bool exist = await File(filePath).exists();
-                if (!exist) {
-                  setState(() {
-                    downloading = true;
-                    i = element.name;
-                  });
-                  await storage
-                      .ref()
-                      .child(element.fullPath)
-                      .getData(66666666)
-                      .then((bytes) async {
-                    file = File(filePath);
-                    await file.writeAsBytes(bytes);
-                  }).catchError((e) {});
-                }
-              }
-            })
-            .then((value) => setState(() {
-                  downloading = false;
-                }))
-            .catchError((e) {
-              showAlert();
-            });
-      }
-    } on SocketException catch (_) {}
-
-    // await downloadFile(urls[i], (i + 1).toString()).then((value) async {
-    //   if (i < urls.length - 1) {
-    //     setState(() {
-    //       ++i;
-    //     });
-    //     await downloadList();
-    //   }
-    // });
+    setListeners(soundInf);
   }
 
   @override
@@ -288,7 +211,7 @@ class _MusicAppState extends State<MusicApp> {
                                     activeColor: Colors.black,
                                     inactiveColor: Colors.grey[350],
                                     value: position.inSeconds.toDouble(),
-                                    max: musicLength.inSeconds.toDouble(),
+                                    max: soundLength.inSeconds.toDouble(),
                                     onChanged: (value) {
                                       seekToSec(value.toInt());
                                     })),
@@ -307,7 +230,7 @@ class _MusicAppState extends State<MusicApp> {
                                     ),
                                   ),
                                   Text(
-                                    "${musicLength.inMinutes}:${musicLength.inSeconds.remainder(60)}",
+                                    "${soundLength.inMinutes}:${soundLength.inSeconds.remainder(60)}",
                                     style: TextStyle(
                                       fontSize: 18.0,
                                     ),
@@ -413,7 +336,7 @@ class _MusicAppState extends State<MusicApp> {
                                   ),
                                 ),
                               ],
-                            )
+                            ),
                           ],
                         ),
                       ),
@@ -425,7 +348,7 @@ class _MusicAppState extends State<MusicApp> {
     );
   }
 
-  StreamSubscription<bool> listenToPlayer() {
+  StreamSubscription listenToPlayer() {
     return _player.playlistFinished.listen((isFinished) {
       if (isFinished && playingNum != title.length && playing != false) {
         if (modeBtn == Icons.sync_alt) {
@@ -530,7 +453,7 @@ class _MusicAppState extends State<MusicApp> {
     SharedPreferences soundInf = await SharedPreferences.getInstance();
     setState(() {
       position = Duration(seconds: soundInf.getInt("position") ?? 0);
-      musicLength = Duration(seconds: soundInf.getInt("musicLength") ?? 0);
+      soundLength = Duration(seconds: soundInf.getInt("musicLength") ?? 0);
       playingNum = soundInf.getInt("playingNum") ?? 0;
       playingTitle = soundInf.getString("playingTitle") ?? '';
     });
@@ -548,52 +471,87 @@ class _MusicAppState extends State<MusicApp> {
     Duration newPos = Duration(seconds: sec);
     _player.seek(newPos);
   }
-}
 
-// Future<String> downloadFile(String url, String fileName) async {
-//   String dir = widget.dir.path;
-//   HttpClient httpClient = HttpClient();
-//   File file;
-//   String filePath = '$dir/$fileName.wav';
-//   // String myUrl = '';
-//   bool exist = await File(filePath).exists();
-//   if (!exist) {
-//     if (mounted)
-//       setState(() {
-//         downloading = true;
-//       });
-//     try {
-//       // myUrl = url + '/' + fileName;
-//       var request = await httpClient.getUrl(Uri.parse(url));
-//       var response = await request.close();
-//       if (response.statusCode == 200) {
-//         var bytes = await consolidateHttpClientResponseBytes(response);
-//         file = File(filePath);
-//         await file.writeAsBytes(bytes);
-//       } else
-//         filePath = 'Error code: ' + response.statusCode.toString();
-//     } catch (ex) {
-//       filePath = 'Can not fetch url';
-//       Alert(
-//         context: context,
-//         type: AlertType.error,
-//         title: "تأكد من الاتصال بالانترنت",
-//         desc: "لتنزيل باقي السور",
-//         buttons: [
-//           DialogButton(
-//             child: Text(
-//               "خروج",
-//               style: TextStyle(color: Colors.white, fontSize: 20),
-//             ),
-//             onPressed: () => SystemNavigator.pop(),
-//             width: 120,
-//           )
-//         ],
-//         onWillPopActive: true,
-//         closeFunction: () => SystemNavigator.pop(),
-//       ).show();
-//       print(ex);
-//     }
-//   }
-//   return filePath;
-// }
+  void setListeners(SharedPreferences soundInf) {
+    _player.current.listen((playingAudio) {
+      if (_player.current != null)
+        try {
+          setState(() {
+            soundLength = playingAudio.audio.duration;
+          });
+          soundInf.setInt('musicLength', soundLength.inSeconds);
+        } catch (e) {}
+    });
+    _player.currentPosition.listen((p) {
+      setState(() {
+        position = p;
+      });
+      soundInf.setInt('position', position.inSeconds);
+    });
+  }
+
+  void updateDetails(int soundNumber, SharedPreferences soundInf) {
+    setState(() {
+      playBtn = Icons.pause;
+      playing = true;
+      playingTitle = title[soundNumber - 1];
+      playingNum = soundNumber;
+    });
+    _player.updateCurrentAudioNotification(
+      metas: Metas(
+        artist: 'الشيخ أحمد جمال',
+        title: playingTitle,
+      ),
+    );
+    soundInf.setString('playingTitle', playingTitle);
+    soundInf.setInt('playingNum', playingNum);
+  }
+
+  void changeScroll() {
+    Future.delayed(Duration.zero, () {
+      _scrollController.animateTo(
+          (_scrollController.position.maxScrollExtent / 115) *
+              (playingNum.toDouble() - 1),
+          duration: Duration(milliseconds: 100),
+          curve: Curves.linear);
+    });
+  }
+
+  Future<void> downloadList() async {
+    File file;
+    final listRef = storage.ref().child("new");
+    try {
+      final result = await InternetAddress.lookup('google.com');
+      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
+        listRef
+            .listAll()
+            .then((list) async {
+              for (var element in list.items) {
+                String filePath = '${widget.dir.path}/${element.name}';
+                bool exist = await File(filePath).exists();
+                if (!exist) {
+                  setState(() {
+                    downloading = true;
+                    i = element.name;
+                  });
+                  await storage
+                      .ref()
+                      .child(element.fullPath)
+                      .getData(66666666)
+                      .then((bytes) async {
+                    file = File(filePath);
+                    await file.writeAsBytes(bytes);
+                  }).catchError((e) {});
+                }
+              }
+            })
+            .then((value) => setState(() {
+                  downloading = false;
+                }))
+            .catchError((e) {
+              showAlert();
+            });
+      }
+    } on SocketException catch (_) {}
+  }
+}
